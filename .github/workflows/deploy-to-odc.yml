@@ -1,0 +1,294 @@
+name: Deploy to OutSystems ODC
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - '.github/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: false
+        default: 'Development'
+        type: string
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_FILE: 'PdfStamperLibrary.csproj'
+  ARTIFACT_NAME: 'PdfStamperLibrary'
+  ZIP_FILE_BASE: 'PdfStamperLibrary'
+
+jobs:
+  # ── BUILD ──────────────────────────────────────────────────────────────────
+  build:
+    name: Build External Logic Library
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Display .NET version
+        run: dotnet --version
+
+      # CRITICAL: Inject unique build metadata into PdfStamper.cs before compile.
+      # This changes the compiled IL code → new modelDigest → ODC creates new revision.
+      # Without this, ODC rejects uploads with identical code as "already exists".
+      - name: Inject Build Metadata
+        shell: pwsh
+        run: |
+          $runNumber  = "${{ github.run_number }}"
+          $commitShort = "${{ github.sha }}".Substring(0, 7)
+          $timestamp  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss UTC")
+          $buildMetadata = "Run #$runNumber | $timestamp | Commit $commitShort"
+
+          Write-Host "Injecting build metadata: $buildMetadata"
+
+          $content = Get-Content PdfStamper.cs -Raw
+          $content = $content -replace 'BUILD_METADATA_PLACEHOLDER', $buildMetadata
+          $content | Out-File -FilePath PdfStamper.cs -Encoding UTF8 -NoNewline
+
+          Write-Host "✅ Build metadata injected into GetBuildVersion()"
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.PROJECT_FILE }}
+
+      - name: Build project
+        shell: pwsh
+        run: |
+          dotnet build ${{ env.PROJECT_FILE }} `
+            --configuration Release `
+            --no-restore `
+            -p:Version=0.1.${{ github.run_number }} `
+            -p:AssemblyVersion=0.1.${{ github.run_number }}.0 `
+            -p:FileVersion=0.1.${{ github.run_number }}.0 `
+            -p:Deterministic=false
+
+      - name: Publish for linux-x64
+        shell: pwsh
+        run: |
+          dotnet publish ${{ env.PROJECT_FILE }} `
+            --configuration Release `
+            --runtime linux-x64 `
+            --output ./publish `
+            --no-build `
+            -p:Version=0.1.${{ github.run_number }} `
+            -p:Deterministic=false
+
+      - name: Create deployment package
+        id: create_zip
+        shell: pwsh
+        run: |
+          $zipFile = "${{ env.ZIP_FILE_BASE }}-${{ github.run_number }}.zip"
+          Compress-Archive -Path ./publish/* -DestinationPath $zipFile -Force
+          $size = (Get-Item $zipFile).Length / 1MB
+          Write-Host "✅ Package: $zipFile ($($size.ToString('F2')) MB)"
+          "ZIP_FILE=$zipFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.run_number }}
+          path: ${{ steps.create_zip.outputs.ZIP_FILE }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Build summary
+        shell: pwsh
+        run: |
+          Write-Output "## ✅ Build Successful" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "**Version:** 0.1.${{ github.run_number }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "**Commit:** ${{ github.sha }}" >> $env:GITHUB_STEP_SUMMARY
+
+  # ── DEPLOY ─────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to ODC
+    runs-on: windows-latest
+    needs: build
+    environment: development
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ github.run_number }}
+
+      - name: Verify artifact
+        id: verify_zip
+        shell: pwsh
+        run: |
+          $zipFile = "${{ env.ZIP_FILE_BASE }}-${{ github.run_number }}.zip"
+          if (-not (Test-Path $zipFile)) { Write-Error "Artifact not found: $zipFile"; exit 1 }
+          $size = (Get-Item $zipFile).Length / 1MB
+          Write-Host "✅ Artifact: $zipFile ($($size.ToString('F2')) MB)"
+          "ZIP_FILE=$zipFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # ── Step 1: Authenticate ─────────────────────────────────────────────
+      - name: "Step 1: Authenticate with ODC"
+        id: auth
+        shell: pwsh
+        run: |
+          Write-Host "Discovering OIDC token endpoint..."
+          $discoveryUrl = "${{ secrets.ODC_PORTAL_URL }}/identity/.well-known/openid-configuration"
+          $discovery = Invoke-RestMethod -Uri $discoveryUrl -Method Get
+          $tokenEndpoint = $discovery.token_endpoint
+          Write-Host "Token endpoint: $tokenEndpoint"
+
+          Write-Host "Requesting access token..."
+          $body = @{
+            grant_type    = "client_credentials"
+            client_id     = "${{ secrets.ODC_CLIENT_ID }}"
+            client_secret = "${{ secrets.ODC_CLIENT_SECRET }}"
+          }
+          $tokenResponse = Invoke-RestMethod -Uri $tokenEndpoint -Method Post -Body $body
+          $accessToken = $tokenResponse.access_token
+          Write-Host "✅ Access token obtained (length: $($accessToken.Length))"
+
+          "ACCESS_TOKEN=$accessToken" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # ── Step 2: Get pre-signed upload URL ───────────────────────────────
+      - name: "Step 2: Get Upload URL"
+        id: upload_url
+        shell: pwsh
+        run: |
+          $headers = @{ Authorization = "Bearer ${{ steps.auth.outputs.ACCESS_TOKEN }}" }
+          $uploadResponse = Invoke-RestMethod `
+            -Uri "${{ secrets.ODC_PORTAL_URL }}/api/external-libraries/v1/uploads" `
+            -Method Get `
+            -Headers $headers
+          Write-Host "✅ Upload URL obtained"
+          "UPLOAD_URL=$($uploadResponse.uploadUrl)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "DOWNLOAD_URL=$($uploadResponse.downloadUrl)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # ── Step 3: Upload ZIP to S3 ─────────────────────────────────────────
+      - name: "Step 3: Upload ZIP to S3"
+        shell: pwsh
+        run: |
+          $zipFile = "${{ steps.verify_zip.outputs.ZIP_FILE }}"
+          $zipBytes = [System.IO.File]::ReadAllBytes($zipFile)
+          Write-Host "Uploading $zipFile ($([math]::Round($zipBytes.Length/1MB,2)) MB)..."
+          Invoke-RestMethod `
+            -Uri "${{ steps.upload_url.outputs.UPLOAD_URL }}" `
+            -Method Put `
+            -Body $zipBytes `
+            -ContentType "application/zip"
+          Write-Host "✅ Upload complete"
+
+      # ── Step 4: Start generation operation ──────────────────────────────
+      - name: "Step 4: Start Generation"
+        id: generation
+        shell: pwsh
+        run: |
+          $headers = @{
+            Authorization  = "Bearer ${{ steps.auth.outputs.ACCESS_TOKEN }}"
+            "Content-Type" = "application/json"
+          }
+          $body = @{
+            fileName    = "${{ env.ZIP_FILE_BASE }}-${{ github.run_number }}.zip"
+            downloadUrl = "${{ steps.upload_url.outputs.DOWNLOAD_URL }}"
+          } | ConvertTo-Json
+
+          $response = Invoke-RestMethod `
+            -Uri "${{ secrets.ODC_PORTAL_URL }}/api/external-libraries/v1/generation-operations/" `
+            -Method Post `
+            -Headers $headers `
+            -Body $body
+          $operationKey = $response.operationKey
+          Write-Host "✅ Generation started: $operationKey"
+          "OPERATION_KEY=$operationKey" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # ── Step 5: Poll until complete ──────────────────────────────────────
+      - name: "Step 5: Poll Generation Status"
+        id: poll
+        shell: pwsh
+        run: |
+          $headers = @{ Authorization = "Bearer ${{ steps.auth.outputs.ACCESS_TOKEN }}" }
+          $operationKey = "${{ steps.generation.outputs.OPERATION_KEY }}"
+          $maxAttempts = 30
+          $attempt = 0
+
+          do {
+            $attempt++
+            Start-Sleep -Seconds 10
+            $response = Invoke-RestMethod `
+              -Uri "${{ secrets.ODC_PORTAL_URL }}/api/external-libraries/v1/generation-operations/$operationKey" `
+              -Method Get `
+              -Headers $headers
+            $status = $response.status
+            Write-Host "Attempt $attempt/$maxAttempts — Status: $status"
+
+            if ($status -eq "Completed") {
+              Write-Host "✅ Generation completed"
+              $revisionNumber = $response.libraryRevisionNumber
+              $libraryKey     = $response.libraryKey
+              Write-Host "Library Key: $libraryKey | Revision: $revisionNumber"
+              "REVISION_NUMBER=$revisionNumber" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "LIBRARY_KEY=$libraryKey"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "STATUS=Completed"                | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              break
+            }
+            elseif ($status -eq "ReadyForReview") {
+              Write-Host "⏸️  Manual approval required in ODC Portal → Libraries → External Libraries → Approve"
+              "STATUS=ReadyForReview" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              break
+            }
+            elseif ($status -eq "Failed") {
+              Write-Error "❌ Generation failed — check ODC Portal generation logs"
+              exit 1
+            }
+          } while ($attempt -lt $maxAttempts)
+
+          if ($attempt -ge $maxAttempts) {
+            Write-Error "❌ Polling timed out after $maxAttempts attempts"
+            exit 1
+          }
+
+      # ── Step 6: Tag revision ─────────────────────────────────────────────
+      - name: "Step 6: Tag Revision"
+        if: steps.poll.outputs.STATUS == 'Completed'
+        shell: pwsh
+        run: |
+          $headers = @{
+            Authorization  = "Bearer ${{ steps.auth.outputs.ACCESS_TOKEN }}"
+            "Content-Type" = "application/json"
+          }
+          $libraryKey     = "${{ steps.poll.outputs.LIBRARY_KEY }}"
+          $revisionNumber = "${{ steps.poll.outputs.REVISION_NUMBER }}"
+          $newTag = "0.1.${{ github.run_number }}"
+
+          $body = @{
+            tag          = $newTag
+            releaseNotes = "Automated deploy — Run #${{ github.run_number }} | Commit ${{ github.sha }}"
+          } | ConvertTo-Json
+
+          Invoke-RestMethod `
+            -Uri "${{ secrets.ODC_PORTAL_URL }}/api/asset-repository/v1/assets/$libraryKey/revisions/$revisionNumber" `
+            -Method Patch `
+            -Headers $headers `
+            -Body $body
+          Write-Host "✅ Revision $revisionNumber tagged as $newTag"
+
+      - name: Deployment summary
+        shell: pwsh
+        run: |
+          $status = "${{ steps.poll.outputs.STATUS }}"
+          if ($status -eq "Completed") {
+            Write-Output "## 🚀 Deployed to ODC" >> $env:GITHUB_STEP_SUMMARY
+            Write-Output "**Version:** 0.1.${{ github.run_number }}" >> $env:GITHUB_STEP_SUMMARY
+            Write-Output "**Revision:** ${{ steps.poll.outputs.REVISION_NUMBER }}" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Output "## ⏸️ Awaiting Manual Approval" >> $env:GITHUB_STEP_SUMMARY
+            Write-Output "Go to ODC Portal → Libraries → External Libraries → Approve" >> $env:GITHUB_STEP_SUMMARY
+          }

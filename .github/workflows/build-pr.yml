@@ -1,0 +1,91 @@
+name: Build & Validate PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_FILE: 'PdfStamperLibrary.csproj'
+  ZIP_FILE: 'PdfStamperLibrary.zip'
+
+jobs:
+  validate:
+    name: Build & Validate
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.PROJECT_FILE }} --verbosity normal
+
+      - name: Build project
+        run: |
+          dotnet build ${{ env.PROJECT_FILE }} `
+            --configuration Release `
+            --no-restore `
+            --verbosity normal
+
+      - name: Publish for linux-x64
+        run: |
+          dotnet publish ${{ env.PROJECT_FILE }} `
+            --configuration Release `
+            --runtime linux-x64 `
+            --output ./publish `
+            --no-build
+
+      - name: Verify required files
+        shell: pwsh
+        run: |
+          $required = @(
+            "PdfStamperLibrary.dll",
+            "PdfStamperLibrary.deps.json",
+            "OutSystems.ExternalLibraries.SDK.dll"
+          )
+          $missing = $required | Where-Object { -not (Test-Path "./publish/$_") }
+          if ($missing) { Write-Error "Missing: $($missing -join ', ')"; exit 1 }
+          Write-Host "✅ All required files present"
+
+      - name: Create deployment package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path ./publish/* -DestinationPath ${{ env.ZIP_FILE }} -Force
+          $size = (Get-Item ${{ env.ZIP_FILE }}).Length / 1MB
+          Write-Host "✅ Package: ${{ env.ZIP_FILE }} ($($size.ToString('F2')) MB)"
+          if ($size -gt 50) { Write-Warning "Package >50MB — check dependencies" }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-build-${{ github.event.pull_request.number }}
+          path: ${{ env.ZIP_FILE }}
+          retention-days: 7
+
+      - name: PR summary
+        shell: pwsh
+        run: |
+          Write-Output "## ✅ PR Build Validated" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "**PR:** #${{ github.event.pull_request.number }} | **Branch:** ${{ github.head_ref }}" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "- ✅ Compiled (Release/linux-x64)" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "- ✅ Required DLLs present" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "- ✅ Deployment package created" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "Ready to merge → will auto-deploy to ODC." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Failure summary
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Output "## ❌ PR Build Failed" >> $env:GITHUB_STEP_SUMMARY
+          Write-Output "Check logs above. Common causes: compile error, missing NuGet, bad .csproj config." >> $env:GITHUB_STEP_SUMMARY
