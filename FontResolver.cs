@@ -14,11 +14,11 @@ public class EmbeddedFontResolver : IFontResolver
     private static readonly Dictionary<string, byte[]> _cache = new();
     private static readonly object _lock = new();
 
-    public string DefaultFontName => "OpenSans";
+    public string DefaultFontName => "DejaVuSans";
 
     public FontResolverInfo? ResolveTypeface(string familyName, bool isBold, bool isItalic)
     {
-        var face = isBold ? "OpenSans-Bold.ttf" : "OpenSans-Regular.ttf";
+        var face = isBold ? "DejaVuSans-Bold.ttf" : "DejaVuSans-Regular.ttf";
         return new FontResolverInfo(face);
     }
 

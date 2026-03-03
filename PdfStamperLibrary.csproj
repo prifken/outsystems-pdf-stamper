@@ -32,8 +32,8 @@
 
     <!-- Embedded fonts — required because Lambda has no system fonts.
          Resource name becomes: PdfStamperLibrary.fonts.OpenSans-Regular.ttf -->
-    <EmbeddedResource Include="fonts\OpenSans-Regular.ttf" />
-    <EmbeddedResource Include="fonts\OpenSans-Bold.ttf" />
+    <EmbeddedResource Include="fonts\DejaVuSans-Regular.ttf" />
+    <EmbeddedResource Include="fonts\DejaVuSans-Bold.ttf" />
   </ItemGroup>
 
 </Project>
