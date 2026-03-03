@@ -196,8 +196,8 @@ jobs:
             "Content-Type" = "application/json"
           }
           $body = @{
-            fileName    = "${{ env.ZIP_FILE_BASE }}-${{ github.run_number }}.zip"
-            downloadUrl = "${{ steps.upload_url.outputs.DOWNLOAD_URL }}"
+            fileName           = "${{ env.ZIP_FILE_BASE }}-${{ github.run_number }}.zip"
+            HighCodeBinaryUri  = "${{ steps.upload_url.outputs.DOWNLOAD_URL }}"
           } | ConvertTo-Json
 
           $response = Invoke-RestMethod `
