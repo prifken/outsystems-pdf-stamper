@@ -29,6 +29,11 @@
   <ItemGroup>
     <!-- Custom icon for ODC Portal + Forge. MUST be EmbeddedResource. -->
     <EmbeddedResource Include="icon.png" />
+
+    <!-- Embedded fonts — required because Lambda has no system fonts.
+         Resource name becomes: PdfStamperLibrary.fonts.OpenSans-Regular.ttf -->
+    <EmbeddedResource Include="fonts\OpenSans-Regular.ttf" />
+    <EmbeddedResource Include="fonts\OpenSans-Bold.ttf" />
   </ItemGroup>
 
 </Project>

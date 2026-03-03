@@ -9,6 +9,13 @@ namespace PdfStamperLibrary;
 
 public class PdfStamper : IPdfStamper
 {
+    // Register embedded font resolver once at startup.
+    // Lambda has no system fonts — this is required or every XFont call fails.
+    static PdfStamper()
+    {
+        PdfSharpCore.Fonts.GlobalFontSettings.FontResolver = EmbeddedFontResolver.Instance;
+    }
+
     // ── StampPDF ────────────────────────────────────────────────────────────
 
     public StampResult StampPDF(
