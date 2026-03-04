@@ -19,8 +19,10 @@
     <!-- OutSystems ODC External Libraries SDK -->
     <PackageReference Include="OutSystems.ExternalLibraries.SDK" Version="1.5.0" />
 
-    <!-- PDF manipulation - pure managed .NET, no native deps (perfect for Lambda) -->
-    <PackageReference Include="PdfSharpCore" Version="1.3.65" />
+    <!-- iText7: robust PDF manipulation, built-in standard fonts, no font files needed.
+         Switched from PdfSharpCore which has a bug parsing OpenType font tables.
+         iText7 Community = AGPL (free for open source). -->
+    <PackageReference Include="itext7" Version="8.0.5" />
 
     <!-- JSON parsing for field map -->
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
@@ -29,11 +31,6 @@
   <ItemGroup>
     <!-- Custom icon for ODC Portal + Forge. MUST be EmbeddedResource. -->
     <EmbeddedResource Include="icon.png" />
-
-    <!-- Embedded fonts — required because Lambda has no system fonts.
-         Resource name becomes: PdfStamperLibrary.fonts.OpenSans-Regular.ttf -->
-    <EmbeddedResource Include="fonts\DejaVuSans-Regular.ttf" />
-    <EmbeddedResource Include="fonts\DejaVuSans-Bold.ttf" />
   </ItemGroup>
 
 </Project>

@@ -1,7 +1,9 @@
 using OutSystems.ExternalLibraries.SDK;
-using PdfSharpCore.Pdf;
-using PdfSharpCore.Pdf.IO;
-using PdfSharpCore.Drawing;
+using iText.Kernel.Pdf;
+using iText.Kernel.Pdf.Canvas;
+using iText.Kernel.Font;
+using iText.Kernel.Colors;
+using iText.IO.Font.Constants;
 using System.Text;
 using System.Text.Json;
 
@@ -9,13 +11,6 @@ namespace PdfStamperLibrary;
 
 public class PdfStamper : IPdfStamper
 {
-    // Register embedded font resolver once at startup.
-    // Lambda has no system fonts — this is required or every XFont call fails.
-    static PdfStamper()
-    {
-        PdfSharpCore.Fonts.GlobalFontSettings.FontResolver = EmbeddedFontResolver.Instance;
-    }
-
     // ── StampPDF ────────────────────────────────────────────────────────────
 
     public StampResult StampPDF(
@@ -55,15 +50,22 @@ public class PdfStamper : IPdfStamper
 
             log.AppendLine($"[STEP 3] Values: {values.Count} values provided");
 
-            // ── Parse ink color
-            var ink = ParseColor(inkColor);
+            // ── Parse ink color (R,G,B in 0-1 range)
+            var (r, g, b) = ParseColor(inkColor);
 
-            // ── Open PDF
-            using var ms = new MemoryStream(templatePdf);
-            var document = PdfReader.Open(ms, PdfDocumentOpenMode.Modify);
-            log.AppendLine($"[STEP 4] PDF opened: {document.PageCount} pages");
+            // ── Open PDF with iText7
+            using var inputMs  = new MemoryStream(templatePdf);
+            using var outputMs = new MemoryStream();
 
-            // ── Stamp each field
+            var reader  = new PdfReader(inputMs);
+            var writer  = new PdfWriter(outputMs);
+            var pdfDoc  = new PdfDocument(reader, writer);
+
+            log.AppendLine($"[STEP 4] PDF opened: {pdfDoc.GetNumberOfPages()} pages");
+
+            // iText7 built-in Helvetica — no font files, works on Lambda
+            var font = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+
             int stamped = 0;
             int skipped = 0;
 
@@ -75,19 +77,18 @@ public class PdfStamper : IPdfStamper
                     continue;
                 }
 
-                if (field.Page < 0 || field.Page >= document.PageCount)
+                // iText7 pages are 1-based
+                int pageNum = field.Page + 1;
+                if (pageNum < 1 || pageNum > pdfDoc.GetNumberOfPages())
                 {
-                    log.AppendLine($"  WARN: field '{field.Field}' references page {field.Page} but PDF has {document.PageCount} pages — skipped");
+                    log.AppendLine($"  WARN: '{field.Field}' page {field.Page} out of range — skipped");
                     skipped++;
                     continue;
                 }
 
-                var page = document.Pages[field.Page];
-                var gfx  = XGraphics.FromPdfPage(page);
-
-                // PDF spec coords (origin bottom-left, Y up) →
-                // PdfSharpCore coords (origin top-left, Y down)
-                double pdfSharpY = (double)page.Height - field.Y;
+                var page   = pdfDoc.GetPage(pageNum);
+                var canvas = new PdfCanvas(page);
+                var color  = new DeviceRgb(r, g, b);
 
                 if (field.Type?.ToLower() == "checkbox")
                 {
@@ -95,48 +96,43 @@ public class PdfStamper : IPdfStamper
                                   || value == "1";
                     if (isChecked)
                     {
-                        var brush = new XSolidBrush(ink);
-                        // Filled 7×7pt square, offset 1pt from checkbox origin for alignment
-                        gfx.DrawRectangle(brush, field.X + 1, pdfSharpY - 8, 7, 7);
+                        // iText7 coords = PDF spec (origin bottom-left, Y up) — no flip needed
+                        canvas.SetFillColor(color)
+                              .Rectangle(field.X + 1, field.Y + 1, 7, 7)
+                              .Fill();
                         stamped++;
                     }
-                    // false checkbox = do nothing (leave the ☐ empty)
                 }
                 else
                 {
-                    // Text field
-                    double fontSize = field.FontSize > 0 ? field.FontSize : 9;
-                    double maxWidth = field.MaxWidth > 0 ? field.MaxWidth : 200;
+                    float fontSize = field.FontSize > 0 ? (float)field.FontSize : 9f;
 
-                    var font  = new XFont("Helvetica", fontSize, XFontStyle.Regular);
-                    var brush = new XSolidBrush(ink);
-
-                    // Truncate if too long to avoid overflow
-                    var displayValue = TruncateToWidth(gfx, font, value, maxWidth);
-                    gfx.DrawString(displayValue, font, brush, new XPoint(field.X, pdfSharpY));
+                    canvas.BeginText()
+                          .SetFontAndSize(font, fontSize)
+                          .SetColor(color, true)
+                          .MoveText(field.X, field.Y)
+                          .ShowText(value)
+                          .EndText();
                     stamped++;
                 }
 
-                gfx.Dispose();
+                canvas.Release();
             }
 
             log.AppendLine($"[STEP 5] Stamped: {stamped} fields, skipped: {skipped}");
 
-            // ── Save to output stream
-            using var outMs = new MemoryStream();
-            document.Save(outMs, false);
-            var filledBytes = outMs.ToArray();
+            pdfDoc.Close();
 
+            var filledBytes = outputMs.ToArray();
             log.AppendLine($"[STEP 6] Output size: {filledBytes.Length / 1024}KB");
 
-            // Success: return minimal log (avoid 5.5MB payload limit)
             return new StampResult
             {
-                Success      = true,
-                Message      = $"Stamped {stamped} fields successfully",
-                FilledPdf    = filledBytes,
+                Success       = true,
+                Message       = $"Stamped {stamped} fields successfully",
+                FilledPdf     = filledBytes,
                 FieldsStamped = stamped,
-                DetailedLog  = $"SUCCESS | {stamped} stamped | {skipped} skipped | {filledBytes.Length / 1024}KB output"
+                DetailedLog   = $"SUCCESS | {stamped} stamped | {skipped} skipped | {filledBytes.Length / 1024}KB output"
             };
         }
         catch (Exception ex)
@@ -163,33 +159,30 @@ public class PdfStamper : IPdfStamper
             if (pdfData == null || pdfData.Length == 0)
                 throw new ArgumentException("pdfData is empty");
 
-            using var ms  = new MemoryStream(pdfData);
-            var document  = PdfReader.Open(ms, PdfDocumentOpenMode.ReadOnly);
-            var firstPage = document.Pages[0];
+            using var ms     = new MemoryStream(pdfData);
+            var reader       = new PdfReader(ms);
+            var pdfDoc       = new PdfDocument(reader);
+            var firstPage    = pdfDoc.GetPage(1);
+            var pageSize     = firstPage.GetPageSize();
+            int pageCount    = pdfDoc.GetNumberOfPages();
+            pdfDoc.Close();
 
             return new PDFInfoResult
             {
                 Success    = true,
-                PageCount  = document.PageCount,
-                PageWidth  = (decimal)firstPage.Width.Point,
-                PageHeight = (decimal)firstPage.Height.Point,
-                Message    = $"{document.PageCount} pages, {firstPage.Width:F0}x{firstPage.Height:F0}pt"
+                PageCount  = pageCount,
+                PageWidth  = (decimal)pageSize.GetWidth(),
+                PageHeight = (decimal)pageSize.GetHeight(),
+                Message    = $"{pageCount} pages, {pageSize.GetWidth():F0}x{pageSize.GetHeight():F0}pt"
             };
         }
         catch (Exception ex)
         {
-            return new PDFInfoResult
-            {
-                Success  = false,
-                Message  = ex.Message
-            };
+            return new PDFInfoResult { Success = false, Message = ex.Message };
         }
     }
 
     // ── GetBuildVersion ─────────────────────────────────────────────────────
-    // IMPORTANT: BUILD_METADATA_PLACEHOLDER is replaced by GitHub Actions
-    // before compilation. This forces a unique modelDigest on every deploy,
-    // which is required for ODC to recognise a new revision.
 
     public string GetBuildVersion()
     {
@@ -199,58 +192,34 @@ public class PdfStamper : IPdfStamper
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
-    private static XColor ParseColor(string inkColor)
+    private static (float r, float g, float b) ParseColor(string inkColor)
     {
-        if (string.IsNullOrWhiteSpace(inkColor))
-            return XColors.Black;
-
-        try
+        if (!string.IsNullOrWhiteSpace(inkColor))
         {
             var parts = inkColor.Split(',');
             if (parts.Length == 3
-                && double.TryParse(parts[0].Trim(), out var r)
-                && double.TryParse(parts[1].Trim(), out var g)
-                && double.TryParse(parts[2].Trim(), out var b))
+                && float.TryParse(parts[0].Trim(), out var r)
+                && float.TryParse(parts[1].Trim(), out var g)
+                && float.TryParse(parts[2].Trim(), out var b))
             {
-                // Values can be 0-1 (PDF style) or 0-255 (RGB style)
-                if (r <= 1 && g <= 1 && b <= 1)
-                    return XColor.FromArgb((int)(r * 255), (int)(g * 255), (int)(b * 255));
-                else
-                    return XColor.FromArgb((int)r, (int)g, (int)b);
+                if (r <= 1f && g <= 1f && b <= 1f)
+                    return (r, g, b);
+                return (r / 255f, g / 255f, b / 255f);
             }
         }
-        catch { /* fall through to default */ }
-
-        return XColors.Black;
-    }
-
-    private static string TruncateToWidth(XGraphics gfx, XFont font, string text, double maxWidth)
-    {
-        if (gfx.MeasureString(text, font).Width <= maxWidth)
-            return text;
-
-        // Binary-search trim to fit
-        int len = text.Length;
-        while (len > 1)
-        {
-            len--;
-            var candidate = text[..len] + "…";
-            if (gfx.MeasureString(candidate, font).Width <= maxWidth)
-                return candidate;
-        }
-        return text[..1];
+        return (0f, 0f, 0f); // default black
     }
 }
 
-// ── Internal model for deserialising field map JSON ──────────────────────────
+// ── Internal model ───────────────────────────────────────────────────────────
 
 internal class FieldDefinition
 {
-    public string Field     { get; set; } = "";
-    public int    Page      { get; set; }
-    public double X         { get; set; }
-    public double Y         { get; set; }        // PDF spec coords (origin bottom-left)
-    public string Type      { get; set; } = "text";
-    public double MaxWidth  { get; set; } = 200;
-    public double FontSize  { get; set; } = 9;
+    public string Field    { get; set; } = "";
+    public int    Page     { get; set; }
+    public double X        { get; set; }
+    public double Y        { get; set; }
+    public string Type     { get; set; } = "text";
+    public double MaxWidth { get; set; } = 200;
+    public double FontSize { get; set; } = 9;
 }
