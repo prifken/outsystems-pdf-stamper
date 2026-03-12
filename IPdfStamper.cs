@@ -81,6 +81,33 @@ public interface IPdfStamper
     );
 
     /// <summary>
+    /// Stamps a PDF using a single list of FieldInstance records (each carrying both
+    /// coordinate metadata and a Value). Pass JSON Serialize(Fields) directly from ODC —
+    /// no separate ValuesJson or string concatenation required.
+    /// </summary>
+    [OSAction(
+        Description = "Stamp a PDF using a serialized List of FieldInstance records. Each record carries both the field coordinates and its value. Pass JSON Serialize(Fields) directly from OutSystems — no separate ValuesJson needed.",
+        ReturnName = "result",
+        ReturnDescription = "Stamping result including the filled PDF binary and status")]
+    StampResult StampPDFFromList(
+
+        [OSParameter(
+            Description = "Binary content of the blank PDF template.",
+            DataType = OSDataType.BinaryData)]
+        byte[] templatePdf,
+
+        [OSParameter(
+            Description = "JSON array of FieldInstance records. Each record must have: Field, Page, X, Y, Type, MaxWidth, FontSize, Value. Pass JSON Serialize(Fields) directly from OutSystems.",
+            DataType = OSDataType.Text)]
+        string fieldInstancesJson,
+
+        [OSParameter(
+            Description = "Ink color as R,G,B values between 0 and 1. Default \"0,0,0\" (black). Use \"0,0,0.55\" for dark blue.",
+            DataType = OSDataType.Text)]
+        string inkColor
+    );
+
+    /// <summary>
     /// Returns build version. Required to force new ODC revisions on every CI/CD deploy.
     /// The BUILD_METADATA_PLACEHOLDER string is replaced by GitHub Actions before compilation.
     /// </summary>

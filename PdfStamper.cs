@@ -150,6 +150,53 @@ public class PdfStamper : IPdfStamper
         }
     }
 
+    // ── StampPDFFromList ────────────────────────────────────────────────────
+
+    public StampResult StampPDFFromList(
+        byte[] templatePdf,
+        string fieldInstancesJson,
+        string inkColor)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(fieldInstancesJson))
+                throw new ArgumentException("fieldInstancesJson is empty");
+
+            var instances = JsonSerializer.Deserialize<List<FieldInstance>>(
+                fieldInstancesJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new ArgumentException("fieldInstancesJson could not be parsed");
+
+            // Build fieldMapJson and valuesJson from the same list
+            var fieldMapJson = System.Text.Json.JsonSerializer.Serialize(
+                instances.Select(f => new FieldDefinition
+                {
+                    Field    = f.Field,
+                    Page     = f.Page,
+                    X        = f.X,
+                    Y        = f.Y,
+                    Type     = f.Type,
+                    MaxWidth = f.MaxWidth,
+                    FontSize = f.FontSize
+                }).ToList());
+
+            var valuesJson = System.Text.Json.JsonSerializer.Serialize(
+                instances.ToDictionary(f => f.Field, f => f.Value ?? ""));
+
+            return StampPDF(templatePdf, fieldMapJson, valuesJson, inkColor);
+        }
+        catch (Exception ex)
+        {
+            return new StampResult
+            {
+                Success     = false,
+                Message     = ex.Message,
+                FilledPdf   = Array.Empty<byte>(),
+                DetailedLog = $"StampPDFFromList ERROR: {ex.Message}"
+            };
+        }
+    }
+
     // ── GetPDFInfo ──────────────────────────────────────────────────────────
 
     public PDFInfoResult GetPDFInfo(byte[] pdfData)
@@ -211,7 +258,7 @@ public class PdfStamper : IPdfStamper
     }
 }
 
-// ── Internal model ───────────────────────────────────────────────────────────
+// ── Internal models ──────────────────────────────────────────────────────────
 
 internal class FieldDefinition
 {
@@ -222,4 +269,21 @@ internal class FieldDefinition
     public string Type     { get; set; } = "text";
     public double MaxWidth { get; set; } = 200;
     public double FontSize { get; set; } = 9;
+}
+
+// Mirrors the OutSystems FieldInstance structure — used by StampPDFFromList
+// so JSON Serialize(Fields) from ODC can be passed directly.
+internal class FieldInstance
+{
+    public string Field     { get; set; } = "";
+    public string Label     { get; set; } = "";
+    public string Section   { get; set; } = "";
+    public int    Page      { get; set; }
+    public double X         { get; set; }
+    public double Y         { get; set; }
+    public string Type      { get; set; } = "text";
+    public double MaxWidth  { get; set; } = 200;
+    public double FontSize  { get; set; } = 9;
+    public string ValueType { get; set; } = "Text";
+    public string Value     { get; set; } = "";
 }
