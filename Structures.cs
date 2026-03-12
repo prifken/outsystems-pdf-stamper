@@ -76,3 +76,42 @@ public struct PDFInfoResult
         IsMandatory = false)]
     public string Message;
 }
+
+/// <summary>
+/// Result returned by ExtractTextBlocks.
+/// TextBlocksJson is a JSON array: [{text, page, x, y, width, height}, ...]
+/// Page is 0-indexed. X/Y use PDF bottom-left origin — same as stamper coordinates.
+/// </summary>
+[OSStructure(Description = "Result from PDF text extraction — use TextBlocksJson to search for field label positions")]
+public struct ExtractionResult
+{
+    [OSStructureField(
+        Description = "True if extraction succeeded",
+        DataType = OSDataType.Boolean,
+        IsMandatory = true)]
+    public bool Success;
+
+    [OSStructureField(
+        Description = "Status message or error details",
+        DataType = OSDataType.Text,
+        IsMandatory = true)]
+    public string Message;
+
+    [OSStructureField(
+        Description = "JSON array of text blocks: [{\"text\":\"Name of Issuer\",\"page\":0,\"x\":95,\"y\":567,\"width\":72,\"height\":10}]. Page is 0-indexed. X/Y match the coordinate system used by StampPDF.",
+        DataType = OSDataType.Text,
+        IsMandatory = false)]
+    public string TextBlocksJson;
+
+    [OSStructureField(
+        Description = "Number of pages in the PDF",
+        DataType = OSDataType.Integer,
+        IsMandatory = false)]
+    public int PageCount;
+
+    [OSStructureField(
+        Description = "Total number of text blocks extracted",
+        DataType = OSDataType.Integer,
+        IsMandatory = false)]
+    public int BlockCount;
+}

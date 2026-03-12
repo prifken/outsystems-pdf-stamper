@@ -108,6 +108,34 @@ public interface IPdfStamper
     );
 
     /// <summary>
+    /// Extracts all text words from a PDF with their bounding box coordinates.
+    /// Use this to discover field label positions for any new form — equivalent to
+    /// running find_coords.py. Search TextBlocksJson for a label name to get its x/y,
+    /// then offset slightly to place your stamp target.
+    /// </summary>
+    [OSAction(
+        Description = "Extract all text blocks with bounding box coordinates from a PDF. Returns a JSON array of {text, page, x, y, width, height}. Use to auto-discover field positions for any new form.",
+        ReturnName = "result",
+        ReturnDescription = "Extraction result with TextBlocksJson array, page count, and block count")]
+    ExtractionResult ExtractTextBlocks(
+
+        [OSParameter(
+            Description = "Binary content of the PDF to extract text from",
+            DataType = OSDataType.BinaryData)]
+        byte[] pdfData,
+
+        [OSParameter(
+            Description = "Only extract from this page (0-indexed). Pass -1 to extract all pages.",
+            DataType = OSDataType.Integer)]
+        int pageFilter,
+
+        [OSParameter(
+            Description = "Only return blocks containing this text (case-insensitive). Leave empty to return all blocks.",
+            DataType = OSDataType.Text)]
+        string textFilter
+    );
+
+    /// <summary>
     /// Returns build version. Required to force new ODC revisions on every CI/CD deploy.
     /// The BUILD_METADATA_PLACEHOLDER string is replaced by GitHub Actions before compilation.
     /// </summary>

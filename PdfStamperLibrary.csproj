@@ -28,6 +28,9 @@
 
     <!-- JSON parsing for field map -->
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
+
+    <!-- PdfPig: text extraction with bounding boxes (MIT license) -->
+    <PackageReference Include="PdfPig" Version="0.1.9" />
   </ItemGroup>
 
   <ItemGroup>

@@ -6,6 +6,8 @@ using iText.Kernel.Colors;
 using iText.IO.Font.Constants;
 using System.Text;
 using System.Text.Json;
+using PdfPigDoc = UglyToad.PdfPig.PdfDocument;
+using PdfPigWord = UglyToad.PdfPig.Content.Word;
 
 namespace PdfStamperLibrary;
 
@@ -226,6 +228,66 @@ public class PdfStamper : IPdfStamper
         catch (Exception ex)
         {
             return new PDFInfoResult { Success = false, Message = ex.Message };
+        }
+    }
+
+    // ── ExtractTextBlocks ───────────────────────────────────────────────────
+
+    public ExtractionResult ExtractTextBlocks(byte[] pdfData, int pageFilter, string textFilter)
+    {
+        try
+        {
+            if (pdfData == null || pdfData.Length == 0)
+                throw new ArgumentException("pdfData is empty");
+
+            var blocks = new List<object>();
+
+            using var doc = PdfPigDoc.Open(pdfData);
+            int pageCount = doc.NumberOfPages;
+
+            int startPage = pageFilter >= 0 ? pageFilter + 1 : 1;
+            int endPage   = pageFilter >= 0 ? pageFilter + 1 : pageCount;
+
+            for (int pageNum = startPage; pageNum <= endPage; pageNum++)
+            {
+                var page = doc.GetPage(pageNum);
+                foreach (PdfPigWord word in page.GetWords())
+                {
+                    if (!string.IsNullOrEmpty(textFilter) &&
+                        !word.Text.Contains(textFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    blocks.Add(new
+                    {
+                        text   = word.Text,
+                        page   = pageNum - 1,
+                        x      = (int)Math.Round(word.BoundingBox.Left),
+                        y      = (int)Math.Round(word.BoundingBox.Bottom),
+                        width  = (int)Math.Round(word.BoundingBox.Width),
+                        height = (int)Math.Round(word.BoundingBox.Height)
+                    });
+                }
+            }
+
+            return new ExtractionResult
+            {
+                Success        = true,
+                Message        = $"Extracted {blocks.Count} blocks from {pageCount} pages",
+                TextBlocksJson = JsonSerializer.Serialize(blocks),
+                PageCount      = pageCount,
+                BlockCount     = blocks.Count
+            };
+        }
+        catch (Exception ex)
+        {
+            return new ExtractionResult
+            {
+                Success        = false,
+                Message        = ex.Message,
+                TextBlocksJson = "[]",
+                PageCount      = 0,
+                BlockCount     = 0
+            };
         }
     }
 
