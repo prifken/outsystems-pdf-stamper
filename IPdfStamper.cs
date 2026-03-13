@@ -153,6 +153,35 @@ public interface IPdfStamper
     );
 
     /// <summary>
+    /// Extracts form fields from a PDF using geometric spatial correlation.
+    /// Supports four detection patterns:
+    ///   A — bordered rectangle input fields (e.g. SF-270, I-9)
+    ///   B — underline fields (e.g. Form D)
+    ///   C — unicode checkbox glyphs ☐ ☑ in the text stream (e.g. Form D)
+    ///   D — geometric drawn checkbox squares (e.g. SF-270, I-9)
+    /// Returns a JSON array of detected fields. Pass the result to an agent that
+    /// assigns machine keys (fieldKey) and section labels — the agent must NOT
+    /// modify coordinate values. Then save to FormTemplate + FormField records.
+    /// Coordinates are PDF-native (bottom-left origin, Y increases upward, points).
+    /// </summary>
+    [OSAction(
+        Description = "Extract form fields from a PDF using geometric spatial correlation — no LLM coordinate guessing. Detects underlines, bordered rectangles, unicode checkboxes (☐ ☑), and drawn checkbox squares. Returns JSON array for agent key-assignment then visual calibration.",
+        ReturnName = "result",
+        ReturnDescription = "JSON array: [{label, fieldType, page, x0, y0, x1, y1, width, height, confidence, pattern, section}]. Coordinates are PDF-native (bottom-left origin, Y up, points). Page is 0-indexed. fieldType: text_input | checkbox | signature | date | currency | phone | zip_code.")]
+    string ExtractFormFields(
+
+        [OSParameter(
+            Description = "Binary content of the blank PDF template to analyze.",
+            DataType = OSDataType.BinaryData)]
+        byte[] pdfData,
+
+        [OSParameter(
+            Description = "Only extract from this page (0-indexed). Pass -1 to extract all pages.",
+            DataType = OSDataType.Integer)]
+        int pageFilter
+    );
+
+    /// <summary>
     /// Returns build version. Required to force new ODC revisions on every CI/CD deploy.
     /// The BUILD_METADATA_PLACEHOLDER string is replaced by GitHub Actions before compilation.
     /// </summary>
