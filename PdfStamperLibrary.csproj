@@ -38,4 +38,9 @@
     <EmbeddedResource Include="icon.png" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Exclude local test runner — not part of the ODC library -->
+    <Compile Remove="test-runner\**" />
+  </ItemGroup>
+
 </Project>

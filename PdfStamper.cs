@@ -385,8 +385,23 @@ public class PdfStamper : IPdfStamper
             allFields.AddRange(EfGeometricCheckboxes(checkboxRects, words, pageIdx, sections));
         }
 
+        // Deduplicate: PdfPig emits the same path geometry for both stroke and fill
+        // operations, producing identical bounding boxes twice. Keep first occurrence
+        // of any field whose page + pattern + coordinates match within 3pt tolerance.
+        var deduped = new List<RawField>();
+        foreach (var f in allFields)
+        {
+            bool isDup = deduped.Any(existing =>
+                existing.Page    == f.Page    &&
+                existing.Pattern == f.Pattern &&
+                Math.Abs(existing.X0 - f.X0) < 3.0 &&
+                Math.Abs(existing.Y0 - f.Y0) < 3.0);
+            if (!isDup)
+                deduped.Add(f);
+        }
+
         return JsonSerializer.Serialize(
-            allFields.Select(f => new {
+            deduped.Select(f => new {
                 label      = f.Label,
                 fieldType  = f.FieldType,
                 page       = f.Page,
