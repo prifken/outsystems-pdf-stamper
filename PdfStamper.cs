@@ -291,6 +291,38 @@ public class PdfStamper : IPdfStamper
         }
     }
 
+    // ── GetAllPageDimensions ─────────────────────────────────────────────────
+
+    public string GetAllPageDimensions(byte[] pdfData)
+    {
+        try
+        {
+            if (pdfData == null || pdfData.Length == 0)
+                throw new ArgumentException("pdfData is empty");
+
+            using var doc = PdfPigDoc.Open(pdfData);
+            int pageCount = doc.NumberOfPages;
+
+            var pages = new List<object>();
+            for (int pageNum = 1; pageNum <= pageCount; pageNum++)
+            {
+                var page = doc.GetPage(pageNum);
+                pages.Add(new
+                {
+                    page      = pageNum - 1,   // 0-indexed
+                    widthPts  = (int)Math.Round(page.Width),
+                    heightPts = (int)Math.Round(page.Height)
+                });
+            }
+
+            return JsonSerializer.Serialize(new { pageCount, pages });
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new { pageCount = 0, pages = Array.Empty<object>(), error = ex.Message });
+        }
+    }
+
     // ── GetBuildVersion ─────────────────────────────────────────────────────
 
     public string GetBuildVersion()

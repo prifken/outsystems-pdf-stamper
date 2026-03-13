@@ -136,6 +136,23 @@ public interface IPdfStamper
     );
 
     /// <summary>
+    /// Returns width and height in PDF points for every page in the document.
+    /// Used by the visual field mapper to know the coordinate bounds for each page.
+    /// GetPDFInfo returns page 1 only — use this when the PDF has fields on multiple pages.
+    /// </summary>
+    [OSAction(
+        Description = "Returns dimensions (width and height in PDF points) for every page. Used by the field mapper canvas to correctly scale and position field markers across all pages.",
+        ReturnName = "result",
+        ReturnDescription = "JSON string: {pageCount, pages:[{page, widthPts, heightPts}]}. Page is 0-indexed.")]
+    string GetAllPageDimensions(
+
+        [OSParameter(
+            Description = "Binary content of the PDF to inspect.",
+            DataType = OSDataType.BinaryData)]
+        byte[] pdfData
+    );
+
+    /// <summary>
     /// Returns build version. Required to force new ODC revisions on every CI/CD deploy.
     /// The BUILD_METADATA_PLACEHOLDER string is replaced by GitHub Actions before compilation.
     /// </summary>
