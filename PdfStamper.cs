@@ -4,6 +4,8 @@ using iText.Kernel.Pdf.Canvas;
 using iText.Kernel.Font;
 using iText.Kernel.Colors;
 using iText.IO.Font.Constants;
+using iText.Forms;
+using iText.Forms.Fields;
 using System.Text;
 using System.Text.Json;
 using UglyToad.PdfPig.Core;
@@ -416,6 +418,197 @@ public class PdfStamper : IPdfStamper
                 section    = f.Section,
             }),
             new JsonSerializerOptions { WriteIndented = false });
+    }
+
+    // ── DetectFormType ───────────────────────────────────────────────────────
+
+    public string DetectFormType(byte[] pdfData)
+    {
+        try
+        {
+            if (pdfData == null || pdfData.Length == 0)
+                throw new ArgumentException("pdfData is empty");
+
+            using var ms     = new MemoryStream(pdfData);
+            using var reader = new PdfReader(ms);
+            using var pdfDoc = new PdfDocument(reader);
+
+            var form = PdfAcroForm.GetAcroForm(pdfDoc, false);
+
+            if (form == null || form.GetAllFormFields().Count == 0)
+                return JsonSerializer.Serialize(new {
+                    formType    = "flat",
+                    hasAcroForm = false,
+                    fieldCount  = 0,
+                    fields      = Array.Empty<object>()
+                });
+
+            var detectedFields = new List<object>();
+            foreach (var kvp in form.GetAllFormFields())
+            {
+                var field   = kvp.Value;
+                var widgets = field.GetWidgets();
+                if (widgets == null || widgets.Count == 0) continue;
+
+                var widget  = widgets[0];
+                var rectArr = widget.GetRectangle(); // PdfArray: [x0, y0, x1, y1]
+                if (rectArr == null) continue;
+
+                float x0 = rectArr.GetAsNumber(0)?.FloatValue() ?? 0;
+                float y0 = rectArr.GetAsNumber(1)?.FloatValue() ?? 0;
+                float x1 = rectArr.GetAsNumber(2)?.FloatValue() ?? 0;
+                float y1 = rectArr.GetAsNumber(3)?.FloatValue() ?? 0;
+
+                var   page    = widget.GetPage();
+                int   pageNum = 0;
+                if (page != null)
+                    try { pageNum = pdfDoc.GetPageNumber(page) - 1; } catch { }
+
+                string fieldType;
+                if      (field is PdfSignatureFormField) fieldType = "signature";
+                else if (field is PdfButtonFormField)    fieldType = "checkbox";
+                else if (field is PdfChoiceFormField)    fieldType = "dropdown";
+                else if (field is PdfTextFormField)      fieldType = "text";
+                else                                     fieldType = "text";
+
+                detectedFields.Add(new {
+                    name         = kvp.Key,
+                    fieldType    = fieldType,
+                    page         = pageNum,
+                    x0           = Math.Round(x0, 2),
+                    y0           = Math.Round(y0, 2),
+                    x1           = Math.Round(x1, 2),
+                    y1           = Math.Round(y1, 2),
+                    width        = Math.Round(x1 - x0, 2),
+                    height       = Math.Round(y1 - y0, 2),
+                    currentValue = field.GetValueAsString() ?? ""
+                });
+            }
+
+            return JsonSerializer.Serialize(new {
+                formType    = "acroform",
+                hasAcroForm = true,
+                fieldCount  = detectedFields.Count,
+                fields      = detectedFields
+            }, new JsonSerializerOptions { WriteIndented = false });
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new {
+                formType    = "flat",
+                hasAcroForm = false,
+                fieldCount  = 0,
+                fields      = Array.Empty<object>(),
+                error       = ex.Message
+            });
+        }
+    }
+
+    // ── FillAcroForm ─────────────────────────────────────────────────────────
+
+    public StampResult FillAcroForm(byte[] templatePdf, string valuesJson, bool flatten)
+    {
+        var log = new StringBuilder();
+        try
+        {
+            if (templatePdf == null || templatePdf.Length == 0)
+                throw new ArgumentException("templatePdf is empty");
+            if (string.IsNullOrWhiteSpace(valuesJson))
+                throw new ArgumentException("valuesJson is empty");
+
+            var values = JsonSerializer.Deserialize<Dictionary<string, string>>(
+                valuesJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? throw new ArgumentException("valuesJson could not be parsed");
+
+            using var inputMs  = new MemoryStream(templatePdf);
+            using var outputMs = new MemoryStream();
+            using var reader   = new PdfReader(inputMs);
+            using var writer   = new PdfWriter(outputMs);
+            using var pdfDoc   = new PdfDocument(reader, writer);
+
+            var form = PdfAcroForm.GetAcroForm(pdfDoc, false)
+                       ?? throw new InvalidOperationException("PDF has no AcroForm fields — use StampPDFFromList for flat PDFs");
+
+            var allFields = form.GetAllFormFields();
+            int filled = 0, skipped = 0;
+
+            foreach (var kvp in values)
+            {
+                string key   = kvp.Key;
+                string value = kvp.Value;
+
+                // Exact match first
+                if (allFields.TryGetValue(key, out var field))
+                {
+                    FillField(field, value, log);
+                    filled++;
+                    continue;
+                }
+
+                // Partial match — AcroForm names can be deeply nested:
+                // e.g., "topmostSubform[0].Page1[0].StreetAddress[0]"
+                var partial = allFields.FirstOrDefault(f =>
+                    f.Key.EndsWith($".{key}[0]",  StringComparison.OrdinalIgnoreCase) ||
+                    f.Key.EndsWith($"[{key}]",    StringComparison.OrdinalIgnoreCase) ||
+                    f.Key.Equals(key,             StringComparison.OrdinalIgnoreCase));
+
+                if (partial.Value != null)
+                {
+                    FillField(partial.Value, value, log);
+                    log.AppendLine($"  partial match: {key} → {partial.Key}");
+                    filled++;
+                }
+                else
+                {
+                    log.AppendLine($"  SKIP: {key} — no matching AcroForm field");
+                    skipped++;
+                }
+            }
+
+            if (flatten)
+                form.FlattenFields();
+
+            pdfDoc.Close();
+
+            var filledBytes = outputMs.ToArray();
+            return new StampResult {
+                Success       = true,
+                FilledPdf     = filledBytes,
+                FieldsStamped = filled,
+                Message       = $"Filled {filled} AcroForm fields" + (flatten ? " (flattened)" : " (editable)") + $", skipped {skipped}",
+                DetailedLog   = log.ToString()
+            };
+        }
+        catch (Exception ex)
+        {
+            return new StampResult {
+                Success     = false,
+                FilledPdf   = Array.Empty<byte>(),
+                Message     = ex.Message,
+                DetailedLog = log.ToString()
+            };
+        }
+    }
+
+    private static void FillField(PdfFormField field, string value, StringBuilder log)
+    {
+        if (field is PdfButtonFormField)
+        {
+            // Find the "on" appearance state — varies by PDF (Yes, On, X, custom value)
+            var states    = field.GetAppearanceStates();
+            var onState   = states?.FirstOrDefault(s =>
+                !s.Equals("Off", StringComparison.OrdinalIgnoreCase)) ?? "Yes";
+            bool isChecked = value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                          || value.Equals("yes",  StringComparison.OrdinalIgnoreCase)
+                          || value == "1" || value == "X";
+            field.SetValue(isChecked ? onState : "Off");
+        }
+        else
+        {
+            field.SetValue(value);
+        }
+        log.AppendLine($"  OK: {field.GetFieldName()} = {value}");
     }
 
     // ── GetBuildVersion ─────────────────────────────────────────────────────

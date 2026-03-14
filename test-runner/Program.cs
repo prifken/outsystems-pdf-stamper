@@ -21,9 +21,44 @@ Console.WriteLine();
 var pdfBytes = File.ReadAllBytes(pdfPath);
 var stamper  = new PdfStamper();
 
-// ── Run ExtractFormFields ─────────────────────────────────────────────────────
-Console.WriteLine("Running ExtractFormFields(pageFilter: -1)...");
-var sw   = System.Diagnostics.Stopwatch.StartNew();
+// ── 1. DetectFormType ─────────────────────────────────────────────────────────
+Console.WriteLine("── DetectFormType ──────────────────────────────────────────");
+var sw       = System.Diagnostics.Stopwatch.StartNew();
+var typeJson = stamper.DetectFormType(pdfBytes);
+sw.Stop();
+Console.WriteLine($"Done in {sw.ElapsedMilliseconds} ms");
+
+var typeResult = JsonSerializer.Deserialize<JsonElement>(typeJson);
+var formType   = typeResult.GetProperty("formType").GetString();
+var acroCount  = typeResult.GetProperty("fieldCount").GetInt32();
+Console.WriteLine($"formType   : {formType}");
+Console.WriteLine($"fieldCount : {acroCount}");
+
+if (formType == "acroform")
+{
+    Console.WriteLine("\nSample AcroForm fields (first 10):");
+    Console.WriteLine($"{"Name",-40} {"Type",-12} {"Pg",-4} BBox");
+    Console.WriteLine(new string('─', 90));
+    foreach (var f in typeResult.GetProperty("fields").EnumerateArray().Take(10))
+    {
+        var name = (f.GetProperty("name").GetString() ?? "").PadRight(40);
+        if (name.Length > 40) name = name[..39] + "…";
+        var ft   = (f.GetProperty("fieldType").GetString() ?? "").PadRight(12);
+        var pg   = f.GetProperty("page").GetInt32();
+        var x0   = f.GetProperty("x0").GetDouble();
+        var y0   = f.GetProperty("y0").GetDouble();
+        var x1   = f.GetProperty("x1").GetDouble();
+        var y1   = f.GetProperty("y1").GetDouble();
+        Console.WriteLine($"{name} {ft} {pg,-4} ({x0:F0},{y0:F0})→({x1:F0},{y1:F0})");
+    }
+    if (acroCount > 10)
+        Console.WriteLine($"  ... and {acroCount - 10} more");
+}
+Console.WriteLine();
+
+// ── 2. ExtractFormFields ──────────────────────────────────────────────────────
+Console.WriteLine("── ExtractFormFields ───────────────────────────────────────");
+sw.Restart();
 var json = stamper.ExtractFormFields(pdfBytes, -1);
 sw.Stop();
 Console.WriteLine($"Done in {sw.ElapsedMilliseconds} ms\n");

@@ -182,6 +182,52 @@ public interface IPdfStamper
     );
 
     /// <summary>
+    /// Detects whether a PDF has AcroForm interactive fields or is a flat PDF.
+    /// Call this before deciding whether to use FillAcroForm or StampPDFFromList.
+    /// AcroForm PDFs (e.g. SF-270) must be filled via FillAcroForm — stamping via
+    /// content stream puts text underneath the interactive field layer.
+    /// Flat PDFs (e.g. Form D) have no AcroForm layer and must use StampPDFFromList.
+    /// </summary>
+    [OSAction(
+        Description = "Detect whether a PDF has AcroForm interactive fields (formType: 'acroform') or is a flat PDF (formType: 'flat'). AcroForm PDFs must be filled with FillAcroForm. Flat PDFs use StampPDFFromList. Also returns the list of all AcroForm field names and positions for admin mapping.",
+        ReturnName = "result",
+        ReturnDescription = "JSON: {formType, hasAcroForm, fieldCount, fields:[{name, fieldType, page, x0, y0, x1, y1, width, height, currentValue}]}. formType is 'acroform' or 'flat'.")]
+    string DetectFormType(
+
+        [OSParameter(
+            Description = "Binary content of the PDF to inspect.",
+            DataType = OSDataType.BinaryData)]
+        byte[] pdfData
+    );
+
+    /// <summary>
+    /// Fills AcroForm fields natively in a PDF. Use when DetectFormType returns 'acroform'.
+    /// Optionally flattens the form (burns values into page content, removes interactive layer).
+    /// Do NOT use this on flat PDFs — use StampPDFFromList instead.
+    /// </summary>
+    [OSAction(
+        Description = "Fill AcroForm interactive fields in a PDF. Use when DetectFormType returns 'acroform'. Supports text, checkbox, dropdown, and signature fields. Set Flatten=True to burn values into the page (non-editable final output) or False to keep the form editable.",
+        ReturnName = "result",
+        ReturnDescription = "StampResult with FilledPdf binary. On success, FieldsStamped = number of fields filled. DetailedLog lists each field outcome.")]
+    StampResult FillAcroForm(
+
+        [OSParameter(
+            Description = "Binary content of the blank AcroForm PDF template.",
+            DataType = OSDataType.BinaryData)]
+        byte[] templatePdf,
+
+        [OSParameter(
+            Description = "JSON object mapping AcroForm field names to values. Use field names from DetectFormType. Checkbox values: 'true'/'false'. Text values: any string.",
+            DataType = OSDataType.Text)]
+        string valuesJson,
+
+        [OSParameter(
+            Description = "True = flatten form (burn values into page, non-editable final output). False = keep form editable (user can still modify values after download).",
+            DataType = OSDataType.Boolean)]
+        bool flatten
+    );
+
+    /// <summary>
     /// Returns build version. Required to force new ODC revisions on every CI/CD deploy.
     /// The BUILD_METADATA_PLACEHOLDER string is replaced by GitHub Actions before compilation.
     /// </summary>
