@@ -887,7 +887,9 @@ public class PdfStamper : IPdfStamper
 
     private static string EfInferType(string label, double width, double height)
     {
-        if (height > 20 && width > 60) return "signature";
+        // Signature fields are genuinely large: tall (>40pt) AND wide (>150pt).
+        // Table cells and header rows are wide but shorter — don't misclassify them.
+        if (height > 40 && width > 150) return "signature";
         var low = label.ToLowerInvariant();
         if (low.Contains("signature"))                           return "signature";
         if (low.Contains("date") || low.Contains("mm/dd"))      return "date";
