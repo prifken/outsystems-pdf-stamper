@@ -443,9 +443,24 @@ public class PdfStamper : IPdfStamper
                     fields      = Array.Empty<object>()
                 });
 
+            var allFormFields = form.GetAllFormFields();
+
+            // Collect all field names so we can filter out XFA parent containers.
+            // A container is any field whose name is a path prefix of another field
+            // (e.g. "topmostSubform[0].Page1[0]" is a container because
+            // "topmostSubform[0].Page1[0].f1_01[0]" exists). Containers share the
+            // same bounding box as their first child and are not directly fillable.
+            var allNames     = allFormFields.Keys.ToHashSet();
+            var containerNames = allNames
+                .Where(name => allNames.Any(other => other != name
+                    && other.StartsWith(name + ".", StringComparison.Ordinal)))
+                .ToHashSet();
+
             var detectedFields = new List<object>();
-            foreach (var kvp in form.GetAllFormFields())
+            foreach (var kvp in allFormFields)
             {
+                if (containerNames.Contains(kvp.Key)) continue; // skip XFA containers
+
                 var field   = kvp.Value;
                 var widgets = field.GetWidgets();
                 if (widgets == null || widgets.Count == 0) continue;
